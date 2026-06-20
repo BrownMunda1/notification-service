@@ -1,6 +1,7 @@
 from django.http import HttpResponseNotAllowed
 
 from rest_framework import status
+from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.authentication import BasicAuthentication
@@ -11,9 +12,7 @@ from api.serializers import NotificationSerializer
 @api_view(["POST"])
 @authentication_classes([BasicAuthentication])
 @permission_classes([IsAuthenticated])
-def notify(request):
-
-    print("Type of request:", type(request))
+def notify(request: Request):
 
     if request.method != "POST":
         return HttpResponseNotAllowed(permitted_methods=["POST"])
