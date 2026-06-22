@@ -1,5 +1,3 @@
-# Load Test Results
-
 ## Run 1 — Baseline (Django dev server, `manage.py runserver`)
 
 **Config:** 10 users, spawn rate 2/s, no run-time limit (manual stop)
