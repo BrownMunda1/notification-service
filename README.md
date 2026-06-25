@@ -122,6 +122,21 @@ Prerequisites
 
 Install & run locally
 
+PostgreSQL Setup:
+```text
+CREATE USER my_new_user WITH PASSWORD 'my_secure_password';
+CREATE DATABASE my_new_db OWNER my_new_user;
+-- Allow the user to connect to the database
+GRANT CONNECT ON DATABASE my_new_db TO my_new_user;
+
+-- Allow the user to create new tables, views, and modify the 'public' schema
+GRANT ALL PRIVILEGES ON SCHEMA public TO my_new_user;
+
+-- Ensure any future tables created in this schema are also manageable by this user
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON TABLES TO my_new_user;
+
+```
+
 ```bash
 git clone <repo-url>
 cd notification-service
@@ -136,6 +151,12 @@ export DATABASE_USER="db_user_name (owner or superuser)"
 export DATABASE_PASSWORD="db_password"
 export DATABASE_HOST="localhost"
 export DATABASE_PORT="5432"
+
+export GUNICORN_WORKERS=4
+export GUNICORN_BIND=0.0.0.0:8000
+export GUNICORN_TIMEOUT=30
+export GUNICORN_LOG_LEVEL=info
+export GUNICORN_WORKER_CLASS=sync
 
 python manage.py migrate
 python manage.py createsuperuser  # create a user for BasicAuth testing

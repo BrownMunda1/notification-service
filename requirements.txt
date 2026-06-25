@@ -4,3 +4,5 @@ psycopg[binary,pool]
 python-dotenv
 
 locust
+
+gunicorn
