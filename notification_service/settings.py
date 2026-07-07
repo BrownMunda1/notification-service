@@ -87,6 +87,12 @@ DATABASES = {
         'PASSWORD': os.getenv("DATABASE_PASSWORD"),
         'HOST': os.getenv("DATABASE_HOST"),
         'PORT': os.getenv("DATABASE_PORT"),
+        "OPTIONS": {
+            "pool": {
+                "min_size": 2,
+                "max_size": 20,
+            },
+        },
     }
 }
 

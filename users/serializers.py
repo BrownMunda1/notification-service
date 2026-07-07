@@ -1,3 +1,5 @@
+import time
+
 from rest_framework import serializers
 
 from django.contrib.auth import get_user_model
@@ -10,7 +12,12 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ["username", "password"]
+        fields = ["id", "username", "password"]
 
     def create(self, validated_data):
-        return User.objects.create_user(**validated_data)
+        print(f"Saving user: {validated_data['username']}")
+        start_time = time.time()
+        created_user = User.objects.create_user(**validated_data)
+        elapsed_time = time.time() - start_time
+        print(f"Created user {validated_data['username']} in {elapsed_time} seconds")
+        return created_user

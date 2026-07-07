@@ -1,4 +1,9 @@
 django
 djangorestframework
-psycopg[binary]
+psycopg[binary,pool]
 python-dotenv
+
+locust
+
+gunicorn
+gevent # for actual concurrency
