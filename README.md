@@ -1,141 +1,197 @@
-# notification-service
+# Notification Service
 
-A Django WSGI-based notification service — a learning project for system design.
+A Django-based notification service built as an incremental system-design learning project. The repository starts from a simple synchronous API and evolves into an asynchronously processed delivery pipeline with Celery, Redis, and PostgreSQL, while keeping the implementation small enough to reason about clearly.
 
-This repository contains a minimal, production-minded notification service built with Django and Django REST Framework. The project started as an educational MVP (save a notification between two users in Postgres) and will evolve into a resilient notification delivery system with retries, circuit breakers, observability and robust error handling.
+This project is intentionally practical rather than theoretical: each layer is implemented, exercised, and documented before moving on to the next one.
 
-Table of Contents
+## Table of Contents
+
 - Overview
-- Current status (MVP)
-- Final vision
-- Features (current & planned)
-- Architecture overview
+- Stack
+- Project structure
+- Architecture (current state)
+- What is implemented
+- Key learnings
 - API reference
-- Quick start (local)
+- Quick start (local development)
 - Development notes
 - Roadmap
 - Contributing
-- License & Contact
+- License & contact
 
-Overview
---------
+## Overview
 
-This service provides an HTTP API to publish notifications from a source user to a target user. It's designed as a focused, extensible playground to learn and demonstrate system design concepts such as: reliable delivery, retry strategies, circuit breakers, background processing, queuing, observability, and graceful error handling.
+The service exposes an HTTP API that accepts a notification request from one authenticated user and routes it toward another user. In the current implementation, the request is accepted quickly, persisted to PostgreSQL, and handed off to a background Celery task for simulated delivery.
 
-Current status (MVP)
----------------------
+The project is designed to explore production backend topics such as:
 
-- Simple POST API that accepts a notification payload and persists it to a PostgreSQL database.
-- Authentication: Basic HTTP authentication is enforced on the endpoint.
-- Data model: `Notification` with `source_user`, `target_user`, plus created/updated timestamps.
-- Endpoint available at: `/api/v1/notify/` (see API Reference below).
+- reliable delivery and retries
+- background processing and queueing
+- request/response decoupling
+- connection pooling and concurrency behavior
+- observability and future migration paths such as Kafka
 
-The project intentionally keeps the MVP tiny so the core learning goals (retries, circuit breakers, workers, metrics) can be added iteratively.
+## Stack
 
-Final vision
-------------
+- Django + Django REST Framework for the API layer
+- Basic HTTP authentication for protected endpoints
+- PostgreSQL with psycopg3 and native connection pooling for durable state
+- Gunicorn as the WSGI server
+- Celery + Redis for asynchronous task processing
+- Locust for load testing and performance experimentation
 
-The final system will be a production-ready notification delivery platform implementing:
+## Project Structure
 
-- Reliable delivery with configurable retry/backoff policies (exponential backoff).
-- Circuit breaker to protect downstream systems (e.g., SMTP providers, external push APIs).
-- Background workers for delivery (Celery / RQ) and durable queues (Redis / RabbitMQ).
-- Idempotency and deduplication to avoid duplicate deliveries.
-- Dead-letter queue for failed messages that need manual inspection.
-- Observability: metrics, tracing and structured logs (Prometheus, Grafana, OpenTelemetry).
-- Extensible delivery channels (email, SMS, push notifications, webhooks).
-- Horizontal scalability and containerization (Docker, Kubernetes) for high availability.
+```text
+notification_service/       # Django project package
+├── celery.py                # Celery app configuration
+├── settings.py
+├── __init__.py              # imports celery_app so Celery loads on startup
+api/                         # Notification logic, DB writes, Celery tasks
+├── models.py                # Notification model with status field
+├── serializers.py
+├── tasks.py                 # send_notification_task
+├── views.py                 # POST /api/v1/notify/ endpoint
+users/                       # User model and auth-related app
+```
 
-Features
---------
+There is no separate notifications app; the notification flow lives in the api app.
 
-Current (MVP):
-- Persist notifications to Postgres via Django ORM.
-- Authenticated POST endpoint.
+## Architecture (current state)
 
-Planned:
-- Background workers for delivery and retry logic.
-- Circuit breaker middleware for external calls.
-- Delivery channel plugins (email/SMS/push/webhook).
-- Monitoring, alerting, and dashboards.
-
-Architecture overview
----------------------
-
-High-level flow (final state):
+The current architecture moves the expensive delivery work out of the request path:
 
 ```mermaid
 flowchart LR
-	Client-->|POST|API[API]
-	API-->DB[(Postgres)]
-	API-->Queue[(Queue)]
-	Queue-->Worker[(Worker)]
-	Worker-->External[External Provider]
-	External-->|Result|Worker
-	Worker-->|Metrics|Monitoring[(Monitoring)]
+    Client -->|POST| API[Gunicorn worker / Django view]
+    API -->|persist notification| DB[(Postgres)]
+    API -->|enqueue task| Redis[(Redis broker)]
+    Redis --> Worker[Celery worker]
+    Worker -->|simulate provider I/O| DB
 ```
 
-In the MVP the API writes directly to Postgres; later we will publish to a durable queue and let workers handle delivery and retries.
+### Request flow
 
-API reference (MVP)
--------------------
+1. A client sends a notification request to the Django API.
+2. The API validates the input, saves a notification record in PostgreSQL, and returns a fast response.
+3. The same request enqueues a Celery task in Redis.
+4. A separate Celery worker processes the task asynchronously and updates the notification status to sent or failed.
 
-Base path: `/api/v1/`
+This decouples request acceptance from delivery work, which is a key step toward understanding queue-based systems.
 
-Notify endpoint
-- URL: `POST /api/v1/notify/`
-- Auth: HTTP Basic Authentication (provide a valid Django user)
-- Request JSON body (example):
+## What is implemented
+
+### Current status
+
+- A protected POST endpoint at /api/v1/notify/ accepts notification payloads.
+- Authentication is enforced with Basic Authentication.
+- Notifications are persisted in PostgreSQL through the Django ORM.
+- Each notification includes a status field with values: pending, sent, and failed.
+- Delivery work is delegated to a Celery task rather than being executed inline in the request thread.
+- Redis is used as the Celery broker; there is no Celery result backend by design.
+
+### Notification model
+
+The Notification model stores:
+
+- source_user
+- target_user
+- created_date_time
+- updated_date_time
+- status
+
+The database table is notifications_data.
+
+### Celery task behavior
+
+The task in api/tasks.py:
+
+- is defined as a shared Celery task with retry support
+- uses notification_id rather than passing ORM objects between processes
+- simulates slow I/O with a short delay
+- introduces a simulated failure rate to exercise retry behavior
+- updates the database status to sent or failed after the attempt lifecycle
+
+### Load testing approach
+
+The project uses Locust to compare performance across increasing concurrency levels (for example 10, 50, and 100 concurrent users) before moving to the next architectural change.
+
+## Key learnings
+
+- Celery broker wiring matters: if notification_service/__init__.py does not import celery_app from celery.py, Celery may silently fall back to its default broker configuration and produce confusing connection errors.
+- Inline synchronous work scales poorly because each request ties up a worker while the delivery logic runs.
+- Async processing improves throughput and keeps the API response time relatively flat under load, even when the downstream work is slower.
+- Retry behavior in Celery is subtle and exception-dependent, so the implementation must carefully handle exhaustion and logging.
+- Under concurrent load, connection and pooling behavior can become a bottleneck, so tuning DB pool size and worker count is important.
+
+## API reference
+
+Base path: /api/v1/
+
+### Notify endpoint
+
+- Method: POST
+- URL: /api/v1/notify/
+- Auth: HTTP Basic Authentication with a valid Django user
+
+Request body example:
 
 ```json
 {
-	"source_user": "alice",
-	"target_user": "bob"
+  "source_user": "alice",
+  "target_user": "bob"
 }
 ```
 
-- Success response: HTTP 201 Created with the created notification JSON (fields: `id`, `source_user`, `target_user`, `created_date_time`, `updated_date_time`).
-- Error responses:
-	- 400 Bad Request: invalid payload
-	- 401 Unauthorized: missing/invalid credentials
-	- 500 Internal Server Error: unexpected server error
+Success response:
 
-Example curl (replace credentials):
+- Status: 202 Accepted
+- Body example:
+
+```json
+{
+  "id": 1,
+  "status": "queued"
+}
+```
+
+Error responses:
+
+- 400 Bad Request: invalid payload
+- 401 Unauthorized: missing or invalid credentials
+- 500 Internal Server Error: unexpected server error
+
+Example curl:
 
 ```bash
 curl -u demo:password -X POST \
-	-H "Content-Type: application/json" \
-	-d '{"source_user":"alice","target_user":"bob"}' \
-	http://localhost:8000/api/v1/notify/
+  -H "Content-Type: application/json" \
+  -d '{"source_user":"alice","target_user":"bob"}' \
+  http://localhost:8000/api/v1/notify/
 ```
 
-Data model (MVP)
-- Table: `notifications_data`
-- Fields: `id`, `sourceUser` (source_user), `targetUser` (target_user), `createdDateTime`, `updatedDateTime`.
+## Quick start (local development)
 
-Quick start (local development)
--------------------------------
+### Prerequisites
 
-Prerequisites
-- Python 3.10+ (a virtual environment is recommended)
-- PostgreSQL (or adapt settings to SQLite for quick local runs)
+- Python 3.10+
+- PostgreSQL
+- Redis
+- A virtual environment is recommended
 
-Install & run locally
+### PostgreSQL setup
 
-PostgreSQL Setup:
-```text
+Create a database and role for local development:
+
+```sql
 CREATE USER my_new_user WITH PASSWORD 'my_secure_password';
 CREATE DATABASE my_new_db OWNER my_new_user;
--- Allow the user to connect to the database
 GRANT CONNECT ON DATABASE my_new_db TO my_new_user;
-
--- Allow the user to create new tables, views, and modify the 'public' schema
 GRANT ALL PRIVILEGES ON SCHEMA public TO my_new_user;
-
--- Ensure any future tables created in this schema are also manageable by this user
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON TABLES TO my_new_user;
-
 ```
+
+### Install and run locally
 
 ```bash
 git clone <repo-url>
@@ -143,11 +199,14 @@ cd notification-service
 python -m venv .venv
 source .venv/bin/activate   # On Windows use: .venv\\Scripts\\activate
 pip install -r requirements.txt
+```
 
-# Configure env vars (example):
+Set the required environment variables:
+
+```bash
 export DJANGO_SECRET_KEY="replace-me"
 export DATABASE_NAME="db_name"
-export DATABASE_USER="db_user_name (owner or superuser)"
+export DATABASE_USER="db_user_name"
 export DATABASE_PASSWORD="db_password"
 export DATABASE_HOST="localhost"
 export DATABASE_PORT="5432"
@@ -157,53 +216,68 @@ export GUNICORN_BIND=0.0.0.0:8000
 export GUNICORN_TIMEOUT=30
 export GUNICORN_LOG_LEVEL=info
 export GUNICORN_WORKER_CLASS=sync
+```
 
+Run database migrations:
+
+```bash
 python manage.py migrate
-python manage.py createsuperuser  # create a user for BasicAuth testing
+```
+
+Create a user for Basic Auth testing:
+
+```bash
+python manage.py createsuperuser
+```
+
+Start Django:
+
+```bash
 python manage.py runserver
 ```
 
-If you prefer Docker, add a `docker-compose.yml` that includes Postgres and Redis, then run migrations and start the Django container. (A compose file is planned in the roadmap.)
+Start the Celery worker:
 
-Development notes
------------------
+```bash
+celery -A notification_service worker --loglevel=info
+```
 
-- Endpoint is implemented at `api.views.notify` and routed under `api/v1/` (see `notification_service/urls.py`).
-- The endpoint requires BasicAuthentication and `IsAuthenticated` permission.
-- The `Notification` model lives in `api.models` and persists to table `notifications_data`.
+If you prefer Docker later, a compose-based setup can be added as part of the roadmap.
 
-Roadmap (high level)
----------------------
+## Development notes
 
-1. Add background worker (Celery) + Redis queue for deliveries.
-2. Implement retry policies (exponential backoff) and persistence of retry attempts.
-3. Add a circuit breaker around external delivery providers.
-4. Implement idempotency keys and deduplication.
-5. Add monitoring and tracing (Prometheus + OpenTelemetry).
-6. Dockerize services and provide `docker-compose.yml` for local dev.
+- The main endpoint is implemented in api/views.py and routed under api/v1/.
+- The endpoint requires BasicAuthentication plus IsAuthenticated permissions.
+- The Notification model lives in api/models.py and persists to the notifications_data table.
+- Celery task wiring is configured via notification_service/celery.py and notification_service/__init__.py.
+- The current implementation uses a simulated provider call and a small failure rate to exercise retries and status updates.
 
-Contributing
-------------
+## Roadmap
 
-Contributions are welcome. Suggested workflow:
+Near-term ideas and planned extensions:
 
-1. Create a branch named `feature/xxx` or `fix/xxx` from `mvp1`.
-2. Add tests that cover your changes.
-3. Run `python manage.py test` and ensure all tests pass.
-4. Open a pull request with a clear description of the change.
+1. Add observability with centralized logs, metrics, and traces.
+2. Compare Redis-backed Celery with Kafka as an alternative broker/streaming primitive.
+3. Tune Celery worker concurrency and pool strategies for higher throughput.
+4. Add self-healing or periodic recovery for notifications that never reach the queue.
+5. Introduce circuit breakers, idempotency, and richer delivery channel support.
+6. Add Docker and docker-compose support for local development.
 
-When you update the project, please also update this README:
-- Update "Current status" and "API reference" sections when the API changes.
-- Add short entries to the top-level changelog (date + summary).
+## Contributing
 
-License & contact
------------------
+Contributions are welcome. A simple workflow is:
 
-This project is MIT-licensed (add a LICENSE file to set this explicitly).
+1. Create a branch named feature/xxx or fix/xxx from the current development branch.
+2. Add or update tests for your change.
+3. Run python manage.py test and confirm the behavior.
+4. Open a pull request with a clear summary.
 
-Author / Maintainer: BrownMunda1
+## License & contact
 
-Need help updating the README after code changes? Ask for an updated README and include what changed (files, endpoints, or architecture). I will keep the README in sync.
+This project is currently maintained as an educational repository. If you want to use or extend it, feel free to open an issue or pull request.
 
-----
+Author / maintainer: BrownMunda1
+
+---
+
 Small, focused, and extensible — this repository is intentionally minimal so you can iterate quickly while learning system design best practices.
