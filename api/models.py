@@ -29,5 +29,12 @@ class Notification(models.Model):
         db_column="updatedDateTime"
     )
 
+    STATUS_CHOICES = [
+        ("pending", "Pending"),
+        ("sent", "Sent"),
+        ("failed", "Failed"),
+    ]
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+
     class Meta:
         db_table = "notifications_data"

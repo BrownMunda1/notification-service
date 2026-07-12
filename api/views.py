@@ -1,4 +1,5 @@
 import time
+import logging
 
 from django.http import HttpResponseNotAllowed
 
@@ -10,6 +11,7 @@ from rest_framework.authentication import BasicAuthentication
 from rest_framework.permissions import IsAuthenticated
 
 from api.serializers import NotificationSerializer
+from api.tasks import send_notification_task
 
 @api_view(["POST"])
 @authentication_classes([BasicAuthentication])
@@ -25,11 +27,11 @@ def notify(request: Request):
     try:
         if serializer.is_valid():
             serializer.save()
-            elapsed_time = time.time() - start_time
-            print(f"Sent Notification successfully in {int(elapsed_time)} seconds")
-            return Response(data=serializer.data, status=status.HTTP_201_CREATED)
+            send_notification_task.delay(serializer.data["id"])
+            return Response({"id": serializer.data["id"], "status": "queued"}, status=status.HTTP_202_ACCEPTED)
         print("Error while sending notification: Request Body invalid")
-        return Response(data={"message": "Invalid Request Body"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(data={"message": "Invalid Request Body", "errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
         print(f"Exception while sending notification: {e}")
-        return Response(data={"error_message": e}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        logging.exception("Exception while sending notification")
+        return Response(data={"error_message": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
