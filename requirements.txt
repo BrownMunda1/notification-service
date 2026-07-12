@@ -7,3 +7,6 @@ locust
 
 gunicorn
 gevent # for actual concurrency
+
+celery
+redis

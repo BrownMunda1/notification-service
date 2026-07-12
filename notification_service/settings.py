@@ -90,7 +90,7 @@ DATABASES = {
         "OPTIONS": {
             "pool": {
                 "min_size": 2,
-                "max_size": 20,
+                "max_size": 50,
             },
         },
     }
@@ -133,3 +133,8 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+
+CELERY_BROKER_URL = 'redis://localhost:6379/0'
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TIMEZONE = 'Asia/Kolkata'
